@@ -1,0 +1,24 @@
+schema_version: 1
+product: omni_navi
+release: 2026-08-25-candidate
+status: integration-candidate
+ros_distribution: humble
+platforms:
+  - x86_64
+  - orin-aarch64
+  - rdk-s100-aarch64
+source_manifest: manifests/omni_navi.lock.repos
+notes:
+  - SCAN-Planner is pinned to an unmerged feature branch commit.
+  - rosdeck is recorded only in the full-stack manifest and is pinned to PR 24.
+  - This candidate is not a production release tag.
+quality_gates:
+  manifest_validation: required
+  x86_joint_build: passed
+  x86_joint_test: passed
+  orin_joint_build: pending
+  s100_joint_build: pending
+  matrix_mapping_tf: pending
+  matrix_localization_tf: pending
+  dog_hardware: pending
+  vbot_hardware: pending

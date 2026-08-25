@@ -1,0 +1,38 @@
+repositories:
+  SCAN-Planner:
+    type: git
+    url: git@github.com:YanYaoyuan/SCAN-Planner.git
+    version: 68cacc5e5e68ea6f61d96ae925a6fe41edb6279e
+  omni-inspection:
+    type: git
+    url: git@github.com:YanYaoyuan/omni-inspection.git
+    version: dbfc9518f1a61688eaf1d2510271c584e3226c3c
+  omni_docking:
+    type: git
+    url: git@github.com:YanYaoyuan/omni_docking.git
+    version: 67c0d8268d513e8d380c3a54467c29441262802e
+  omni_mission_manager:
+    type: git
+    url: git@github.com:YanYaoyuan/omni_mission_manager.git
+    version: 5293de5cfb31a634b5b0daf7e70b9bfc7e30ccf4
+  omni_robot_bridge:
+    type: git
+    url: git@github.com:YanYaoyuan/omni_robot_bridge.git
+    version: 14f27ca480c605c8e7f559a75f68de7d598ce60f
+  omni_robot_interfaces:
+    type: git
+    url: git@github.com:YanYaoyuan/omni_robot_interfaces.git
+    version: f0dbd6c40fc21def30d1350a7df378b973779ff1
+  omni_slam:
+    type: git
+    url: git@github.com:YanYaoyuan/omni_slam.git
+    version: dbdf26774199cf93d7cf7c7da94eabf039b850c9
+  omni_tf_manager:
+    type: git
+    url: git@github.com:YanYaoyuan/omni_tf_manager.git
+    version: 790f0d4f2696ad4a957a32b61742378bb146baa3
+  rosdeck:
+    type: git
+    url: git@github.com:lifliu/rosdeck.git
+    version: 69b8efdb1e50ebeb51ee602b7c11b686b80410ca
+

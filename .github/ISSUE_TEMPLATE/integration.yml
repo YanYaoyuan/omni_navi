@@ -1,0 +1,55 @@
+name: Cross-repository integration
+description: Track an interface, build, simulation, hardware or release issue spanning repositories.
+title: "[integration] "
+labels:
+  - integration
+body:
+  - type: dropdown
+    id: gate
+    attributes:
+      label: Quality gate
+      options:
+        - Build
+        - Unit test
+        - Simulation
+        - Hardware
+        - Packaging
+        - Security
+    validations:
+      required: true
+  - type: input
+    id: repositories
+    attributes:
+      label: Affected repositories
+      placeholder: omni_tf_manager, omni_slam, SCAN-Planner
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      placeholder: All, x86, Orin, S100, Matrix, Dog or VBot
+    validations:
+      required: true
+  - type: textarea
+    id: contract
+    attributes:
+      label: Expected contract or outcome
+      description: Include topics, services, actions, TF frames, artifacts or acceptance thresholds.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Current evidence
+      description: Include commit SHAs, CI links, logs and reproduction commands.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: List objective checks required before closing this issue.
+    validations:
+      required: true
+
