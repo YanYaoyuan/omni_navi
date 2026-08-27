@@ -27,4 +27,7 @@ repositories:
     type: git
     url: git@github.com:YanYaoyuan/omni_tf_manager.git
     version: 790f0d4f2696ad4a957a32b61742378bb146baa3
-
+  vbot_ros2_msgs:
+    type: git
+    url: git@github.com:VitaDynamics/vbot_ros2_msgs.git
+    version: a598337a7c4ec6a13cfe28ec6a8adf6866278a3c

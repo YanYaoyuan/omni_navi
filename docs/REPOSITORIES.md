@@ -21,6 +21,12 @@ Inventory date: 2026-08-26.
 | [`rosdeck`](https://github.com/lifliu/rosdeck) | Public upstream/shared repo | Mobile App and authenticated App-facing WebSocket gateway | Gateway is the only App-facing runtime adapter exception; do not place Mission/Docking/Bridge/vendor control back into the App repo |
 | [`omni-inspection`](https://github.com/YanYaoyuan/omni-inspection) | Private | C++ Edge/载荷、Go backend/video、TS Web console and deployment | Edge becomes a typed ROS facade; add one C++ `omni_inspection_executor` package here without creating a new repository |
 
+## Third-party source dependencies
+
+| Repository | Upstream responsibility | Integration policy |
+| --- | --- | --- |
+| [`vbot_ros2_msgs`](https://github.com/VitaDynamics/vbot_ros2_msgs) | Public ROS 2 Humble messages, services and actions for VITA robots | Keep as an independent upstream checkout pinned by commit SHA in both manifests; do not copy its generated interfaces into product repositories |
+
 最小新增口径固定为：两个 package、一个新运行进程、零个新仓库。`omni_navi` 增加无业务节点的 `omni_robot_bringup`；现有 `omni-inspection` 增加唯一新进程 `omni_inspection_executor`。
 
 ## Not independent product repositories

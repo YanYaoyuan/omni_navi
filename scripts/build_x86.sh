@@ -15,7 +15,7 @@ source_ros_setup() {
 }
 
 usage() {
-  echo "Usage: $0 [--workspace DIR] [--profile integration|full-slam] [--build-type TYPE]" >&2
+  echo "Usage: $0 [--workspace DIR] [--profile integration|vbot|full-slam] [--build-type TYPE]" >&2
 }
 
 while (($#)); do
@@ -48,7 +48,7 @@ while (($#)); do
 done
 
 case "$profile" in
-  integration|full-slam) ;;
+  integration|vbot|full-slam) ;;
   *) echo "Unsupported profile: $profile" >&2; exit 2 ;;
 esac
 
@@ -69,7 +69,7 @@ fi
 src="${workspace}/src"
 required_repositories=(
   SCAN-Planner omni_docking omni_mission_manager omni_robot_bridge
-  omni_robot_interfaces omni_slam omni_tf_manager
+  omni_robot_interfaces omni_slam omni_tf_manager vbot_ros2_msgs
 )
 for repository in "${required_repositories[@]}"; do
   [[ -d "${src}/${repository}" ]] || {
@@ -92,6 +92,17 @@ targets=(
   omni_tf_manager omni_slam_manager scan_planner omni_docking
   omni_mission_manager
 )
+
+vbot_adapter=OFF
+if [[ "$profile" == vbot ]]; then
+  base_paths+=(
+    "${src}/vbot_ros2_msgs/foxglove_msgs"
+    "${src}/vbot_ros2_msgs/function_msgs"
+    "${src}/vbot_ros2_msgs/software_msgs"
+  )
+  targets+=(foxglove_msgs function_msgs software_msgs)
+  vbot_adapter=ON
+fi
 
 if [[ "$profile" == full-slam ]]; then
   if ! ros2 pkg prefix livox_ros_driver2 >/dev/null 2>&1; then
@@ -119,6 +130,6 @@ colcon build \
   --packages-select rosdeck_robot_bridge \
   --cmake-args \
     "-DCMAKE_BUILD_TYPE=${build_type}" \
-    -DROSDECK_BUILD_VBOT_ADAPTER=OFF \
+    "-DROSDECK_BUILD_VBOT_ADAPTER=${vbot_adapter}" \
     -DROSDECK_BUILD_ZSIBOT_ADAPTER=OFF \
   --event-handlers console_cohesion+

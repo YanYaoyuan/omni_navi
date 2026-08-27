@@ -39,7 +39,7 @@ Known non-generic dependencies:
 | Component/profile | External input |
 | --- | --- |
 | FAST-LIO/ICP | `livox_ros_driver2`, `common_interfaces`, PCL/Eigen |
-| VBot adapter | `function_msgs`, `software_msgs`, matching VBot runtime |
+| VBot adapter | Manifest-pinned `vbot_ros2_msgs`; matching VBot runtime is required on hardware |
 | ZsiBot adapter | Correct ZSL-1 or ZSL-1W vendor SDK and ABI |
 | Orin | Target-compatible sysroot/toolchain and vendor libraries |
 | RDK S100 | `/opt/tros/humble` or compatible sysroot/toolchain |
@@ -57,6 +57,16 @@ Integration surface:
 
 This selects explicit package roots so generic CMake demos and Planner
 simulator packages are not accidentally discovered.
+
+VBot interfaces and adapter:
+
+```bash
+./scripts/build_x86.sh --profile vbot
+```
+
+This profile builds the manifest-pinned `foxglove_msgs`, `function_msgs` and
+`software_msgs` packages before compiling `omni_robot_bridge` with its VBot
+adapter enabled. Hardware tests still require the matching closed VBot runtime.
 
 Full SLAM algorithms:
 

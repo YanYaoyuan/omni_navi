@@ -60,7 +60,8 @@ V1 migration exceptions: omni_tf_manager/SlamStatus, omni_slam_interfaces
 ```
 
 默认导入 [manifests/omni_navi.lock.repos](manifests/omni_navi.lock.repos)
-中固定的 7 个导航核心仓库，目标目录为 `.workspace/src`。清单使用 commit SHA，
+中固定的 7 个导航核心仓库和 VITA 官方 `vbot_ros2_msgs` 接口仓库，目标目录为
+`.workspace/src`。清单使用 commit SHA，
 相同清单在不同机器上得到相同源码。
 
 若需要同时拉取 App 和云平台：
@@ -86,6 +87,15 @@ profile 要求先提供 `livox_ros_driver2` 和对应平台依赖：
 ```bash
 ./scripts/build_x86.sh --workspace .workspace --profile full-slam
 ```
+
+构建 VBot ROS 接口和 Bridge 的 VBot adapter：
+
+```bash
+./scripts/build_x86.sh --workspace .workspace --profile vbot
+```
+
+`vbot_ros2_msgs` 保持为独立上游仓库，仅通过 manifest 固定版本，不在本仓库复制
+源码。闭源 VBot 运行时由目标机器人提供，不属于该接口仓库。
 
 具体依赖与失败条件见 [docs/BUILD.md](docs/BUILD.md)。
 

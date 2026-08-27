@@ -21,6 +21,7 @@ CORE = {
     "omni_robot_interfaces",
     "omni_slam",
     "omni_tf_manager",
+    "vbot_ros2_msgs",
 }
 FULL_STACK = CORE | {"omni-inspection", "rosdeck"}
 
@@ -102,4 +103,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

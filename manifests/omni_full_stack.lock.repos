@@ -35,4 +35,7 @@ repositories:
     type: git
     url: git@github.com:lifliu/rosdeck.git
     version: 69b8efdb1e50ebeb51ee602b7c11b686b80410ca
-
+  vbot_ros2_msgs:
+    type: git
+    url: git@github.com:VitaDynamics/vbot_ros2_msgs.git
+    version: a598337a7c4ec6a13cfe28ec6a8adf6866278a3c
