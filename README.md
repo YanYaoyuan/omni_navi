@@ -11,19 +11,21 @@ Omni 巡检机器人的导航产品集成仓库。这里不复制各模块源码
 ## 产品边界
 
 ```text
-Rosdeck App / Cloud
-        |
-        v
-omni_mission_manager ------> SCAN-Planner
-        |                         |
-        v                         v
-  omni_docking ----------> omni_robot_bridge ---> Vendor SDK
-        ^                         ^
-        |                         | RobotState / SlamStatus
-        +-------------------------+---- omni_slam
-                                      omni_tf_manager
+Local App --> omni_ws_gateway --+
+                                |
+Cloud -----> Edge Agent --------+--> omni_mission_manager
+                                      |       |       |
+                                      v       v       v
+                                  Planner  Docking  Inspection Executor
+                                      |       |
+                                      +---+---+
+                                          v
+                                  omni_robot_bridge ---> Vendor SDK
+                                          ^
+                                SLAM --> TF/RobotState
 
-All typed contracts: omni_robot_interfaces
+V2 product contracts: omni_robot_interfaces
+V1 migration exceptions: omni_tf_manager/SlamStatus, omni_slam_interfaces
 ```
 
 ## 仓库分层
@@ -33,10 +35,21 @@ All typed contracts: omni_robot_interfaces
 | 接口与坐标系 | `omni_robot_interfaces`, `omni_tf_manager` |
 | 定位与规划 | `omni_slam`, `SCAN-Planner` |
 | 机器人运行时 | `omni_robot_bridge`, `omni_docking`, `omni_mission_manager` |
-| App 与云平台 | `rosdeck`, `omni-inspection` |
+| 机器人边缘与载荷 | `omni-inspection/edge-agent`, `omni_inspection_executor` |
+| App 与云平台 | `rosdeck`, `omni-inspection/backend`, `web-console`, `video-webrtc-gateway` |
 
 详细职责和远端地址见 [docs/REPOSITORIES.md](docs/REPOSITORIES.md)，系统关系见
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+
+当前三人团队的近期交付顺序见
+[docs/INTEGRATION_TODO.md](docs/INTEGRATION_TODO.md)。Mission Manager 与 Docking
+的 C++ 行为重写分别在 `omni_mission_manager/docs/CPP_REWRITE_DESIGN.md` 和
+`omni_docking/docs/CPP_REWRITE_DESIGN.md` 中定义；这两份文件应先在各自仓库提交，
+再恢复为对应远端 main 的可点击链接。
+
+整机最小新增仅包含两个 package、一个新运行进程、零个新仓库：
+`omni_robot_bringup` 是无业务节点的集成包，`omni_inspection_executor` 是位于
+现有 `omni-inspection` 仓库的唯一新增机器人运行进程。
 
 ## 获取固定版本
 
@@ -82,7 +95,6 @@ profile 要求先提供 `livox_ros_driver2` 和对应平台依赖：
 2. 联合版本使用不可变 SHA，不使用浮动 `main` 作为发布输入。
 3. x86、Orin、S100 通过同一 BOM 追踪源码，平台产物可不同。
 4. TF、接口、控制权和安全契约的破坏性变化必须联合发布。
-5. App/云平台可以独立发布，但其接口版本必须记录在全栈 BOM 中。
+5. App/Cloud 服务可以独立发布，但接口版本必须记录在全栈 BOM；机器人侧 Edge Agent 和 Inspection Executor 必须进入机器人 BOM、联合 CI 与目标机部署验证。
 
 当前集成缺口和优先级见 [docs/INTEGRATION_TODO.md](docs/INTEGRATION_TODO.md)。
-
