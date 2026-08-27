@@ -40,7 +40,7 @@
 当前状态应定义为“核心模块可单独运行，尚未形成可部署整机巡检栈”。主要证据如下：
 
 - `omni_robot_bridge/launch/product_bringup.launch.py` 只启动 Bridge、Safety Supervisor 和可选 OpenNav Docking；
-- 当前打包脚本没有统一包含 `omni_slam`、SCAN-Planner 和自研 `omni_docking`；
+- 当前打包脚本没有统一包含 `omni_slam`、`omni_planner` 和自研 `omni_docking`；
 - SLAM、Planner 仍依赖各仓库脚本单独启动，缺少统一 profile、启动顺序和故障域；
 - Mission 消费 `/omni/control/authority`，Bridge 尚未提供该 typed service；
 - Docking 仍使用 `/rosdeck/control_*` 字符串租约和 `lio_map`；
@@ -80,7 +80,7 @@ flowchart TB
         PAYLOAD["omni_inspection_executor<br/>拍照、录像、识别、证据落盘"]
     end
     subgraph AUTONOMY["自主能力"]
-        PLANNER["SCAN-Planner<br/>FollowRoute + 导航候选速度"]
+        PLANNER["omni_planner<br/>FollowRoute + 导航候选速度"]
         DOCKING["omni_docking<br/>末端进桩、出桩、充电确认"]
     end
     subgraph ESTIMATION["状态估计"]
@@ -120,7 +120,7 @@ flowchart TB
 | `omni_robot_interfaces` | 无 | ROS IDL | 跨仓产品接口和常量的唯一来源 | SLAM 状态接口仍分散；V1 ABI 冻结不完整 |
 | `omni_tf_manager` | `/omni_tf_manager` | C++ | canonical TF、6DoF 外参、传感器 alias、标准 odom、TF ready | Dog/VBot 仍为 shadow；ready 语义需 fail-closed |
 | `omni_slam` | `/omni_slam_manager`、`/omni_fast_lio`、`/omni_icp_relocalization` | Python + C++ | 建图、地图存储、定位和 SLAM 状态 | canonical QoS 尚未闭环 |
-| `SCAN-Planner` | `/omni_scan_planner`、`/omni_closed_loop_controller` | C++ | FollowRoute、规划、跟踪、navigation 候选速度 | 正式 Topic/ready 默认值和 feature 分支尚未收敛 |
+| `omni_planner` | `/omni_scan_planner`、`/omni_closed_loop_controller` | C++ | FollowRoute、规划、跟踪、navigation 候选速度 | 正式 Topic/ready 默认值和 feature 分支尚未收敛 |
 | `omni_robot_bridge` | `/omni_robot_bridge`、`/omni_safety_supervisor` | C++ | 唯一 SDK owner、租约、速度仲裁、安全门、BMS、RobotState | typed authority 缺失；当前节点名仍为 `rosdeck_*` |
 | `omni_docking` | `/omni_docking` | 目标 C++ | Dock/Undock、末端感知和控制、接触与充电确认 | 当前 Python 原型不可作为真机基线 |
 | `omni_mission_manager` | `/omni_mission_manager` | 目标 C++ | 任务、路线、检查点、持久化、Return-to-Dock 编排 | 当前 Python ROS wiring 有阻断问题 |

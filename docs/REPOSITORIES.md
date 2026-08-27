@@ -9,7 +9,7 @@ Inventory date: 2026-08-26.
 | [`omni_robot_interfaces`](https://github.com/YanYaoyuan/omni_robot_interfaces) | Private fork | Stable ROS messages, services, actions and constants | `main` | Single typed contract source; README still contains pre-extraction ownership text that must be updated |
 | [`omni_tf_manager`](https://github.com/YanYaoyuan/omni_tf_manager) | Public | Canonical TF authority, extrinsics, sensor aliases and readiness | `main` | V1 temporarily owns SlamStatus; V2 moves that type to interfaces with SLAM as producer and TF/Bridge/Mission as consumers |
 | [`omni_slam`](https://github.com/YanYaoyuan/omni_slam) | Private | FAST-LIO mapping, ICP relocalization and stateful SLAM manager | `main` | Full build requires Livox messages; x86/Orin/S100 platform workflows exist |
-| [`SCAN-Planner`](https://github.com/YanYaoyuan/SCAN-Planner) | Public fork | Collision-aware route planning and velocity generation | `main` | Current local integration uses `feature/bgy-planner-safety-foundation`, not default `main` |
+| [`omni_planner`](https://github.com/YanYaoyuan/omni_planner) | Public | Collision-aware route planning and velocity generation | `main` | Independent repository migrated with all branches and tags from the former fork |
 | [`omni_robot_bridge`](https://github.com/YanYaoyuan/omni_robot_bridge) | Private | Sole vendor SDK owner, authority, velocity arbitration, E-stop and RobotState | `main` | Repository renamed; ROS package remains `rosdeck_robot_bridge` for deployed-unit compatibility |
 | [`omni_docking`](https://github.com/YanYaoyuan/omni_docking) | Private | Dock geometry, final servo, undock and charge verification | `main` | Python is a behavior prototype; production target is a same-repository, single-process C++ rewrite with relative-pose/contact gates |
 | [`omni_mission_manager`](https://github.com/YanYaoyuan/omni_mission_manager) | Private | Mission lifecycle, route/checkpoint execution and return-to-dock orchestration | `main` | Python is a behavior prototype; production target is a same-repository, single-process C++ rewrite after contract freeze |
@@ -33,10 +33,10 @@ Inventory date: 2026-08-26.
 
 - `build/`, `install/`, `log/`, `.ruff_cache/` and `.pytest_cache/` are local
   outputs and must never enter a source manifest.
-- `SCAN-Planner/zsibot_sdk` contains vendor/platform material inside the Planner
+- `omni_planner/zsibot_sdk` contains vendor/platform material inside the Planner
   checkout. It is not a source of product command authority; unified robot
   control belongs to `omni_robot_bridge`.
-- Simulator packages under `SCAN-Planner/src/simulator` are validation tools,
+- Simulator packages under `omni_planner/src/simulator` are validation tools,
   not production navigation packages.
 
 ## Source-of-truth rules

@@ -68,7 +68,7 @@ fi
 
 src="${workspace}/src"
 required_repositories=(
-  SCAN-Planner omni_docking omni_mission_manager omni_robot_bridge
+  omni_planner omni_docking omni_mission_manager omni_robot_bridge
   omni_robot_interfaces omni_slam omni_tf_manager vbot_ros2_msgs
 )
 for repository in "${required_repositories[@]}"; do
@@ -83,7 +83,7 @@ base_paths=(
   "${src}/omni_tf_manager"
   "${src}/omni_slam/omni_slam_interfaces"
   "${src}/omni_slam/omni_slam_manager"
-  "${src}/SCAN-Planner/src/planner"
+  "${src}/omni_planner/src/planner"
   "${src}/omni_robot_bridge"
   "${src}/omni_docking"
   "${src}/omni_mission_manager"

@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SHA = re.compile(r"^[0-9a-f]{40}$")
 SSH_URL = re.compile(r"^git@github\.com:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.git$")
 CORE = {
-    "SCAN-Planner",
+    "omni_planner",
     "omni_docking",
     "omni_mission_manager",
     "omni_robot_bridge",

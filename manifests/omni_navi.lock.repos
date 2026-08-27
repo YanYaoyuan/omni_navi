@@ -1,7 +1,7 @@
 repositories:
-  SCAN-Planner:
+  omni_planner:
     type: git
-    url: git@github.com:YanYaoyuan/SCAN-Planner.git
+    url: git@github.com:YanYaoyuan/omni_planner.git
     version: 68cacc5e5e68ea6f61d96ae925a6fe41edb6279e
   omni_docking:
     type: git

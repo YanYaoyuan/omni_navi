@@ -33,7 +33,7 @@ V1 migration exceptions: omni_tf_manager/SlamStatus, omni_slam_interfaces
 | 分层 | 仓库 |
 | --- | --- |
 | 接口与坐标系 | `omni_robot_interfaces`, `omni_tf_manager` |
-| 定位与规划 | `omni_slam`, `SCAN-Planner` |
+| 定位与规划 | `omni_slam`, `omni_planner` |
 | 机器人运行时 | `omni_robot_bridge`, `omni_docking`, `omni_mission_manager` |
 | 机器人边缘与载荷 | `omni-inspection/edge-agent`, `omni_inspection_executor` |
 | App 与云平台 | `rosdeck`, `omni-inspection/backend`, `web-console`, `video-webrtc-gateway` |
