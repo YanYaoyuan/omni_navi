@@ -1,175 +1,233 @@
-# Omni Navi 机器狗整机运行架构
+# Omni 巡检机器人整机架构
 
-> 状态：Draft v0.2（架构冻结候选）
-> 审计基线：2026-08-25
-> 文档修订：2026-08-26
-> 适用平台：Matrix/x86、Orin、RDK S100、真实机器狗
+> 文档状态：源码审计版 v1.0
+>
+> 审计基线：2026-08-28 当前工作区
+>
+> 适用平台：Matrix/x86、NVIDIA Orin、RDK S100、真实机器狗
+>
 > 所有者：`omni_navi` 集成仓库
+> 重要结论：当前是“模块能力基本成形、整机产品链尚未闭环”，不能宣称已经具备可放行的自动巡检/回充整机。
 
-## 1. 文档目的
+## 1. 文档导航
 
-本文定义机器狗上电后到完成巡检、返航和回充所需的整机运行边界，重点回答：
+本页回答整机层问题：模块边界、权威关系、启动/关闭、关键业务流、安全不变量、故障域和放行条件。实现细节拆到以下审计文档：
 
-- 每个仓库、进程和 ROS 节点负责什么；
-- 关键 Topic、Service、Action、TF 和 QoS 由谁提供、由谁消费；
-- App、Cloud、Edge Agent 与机器人本地自治之间如何通信；
-- 谁可以控制底盘，以及失联、进程退出、定位丢失时如何停车；
-- 地图、路线、Dock、标定和软件版本如何绑定；
-- 量产前还缺哪些能力，哪些能力应归入现有模块。
+- [机器人运行时模块详解](MODULES_ROBOT_RUNTIME.md)：Interfaces、TF、SLAM、Planner、Bridge、Docking、Mission；
+- [平台、边缘、视频与客户端模块详解](MODULES_PLATFORM_CLIENTS.md)：Inspection Cloud/Edge/Web/Video、Rosdeck、VBot IDL、Navi 集成；
+- [跨模块接口矩阵](INTERFACE_MATRIX.md)：Topic、Service、Action、TF、QoS、资产和北向协议；
+- [全仓库源码审计清单](REPOSITORY_AUDIT.md)：11 个仓库、39 个 ROS 包、提交版本、入口和测试证据；
+- [仓库目录](REPOSITORIES.md) 与 [联合构建](BUILD.md)：远端所有权和导入/构建方法；
+- [近期集成交付](INTEGRATION_TODO.md)：阶段计划，不能替代本页的架构事实。
 
-本文是目标架构，不代表所有内容已经实现。表格中的“当前偏差”和文末放行门槛用于区分现状与目标。
+后文统一使用：
 
-## 2. 范围和非目标
+- **当前**：本次实际读到的源码/配置行为；
+- **目标**：产品架构要求，但代码未必实现；
+- **缺口**：会阻断当前链路或放行的差异；
+- **遗留**：迁移期兼容入口，不允许新模块继续依赖。
 
-范围包括机器人本体上运行的：
+## 2. 范围与非目标
 
-- 传感器接入、TF、SLAM、Planner、控制器；
-- 厂商 SDK Bridge、安全监督、任务管理、自动回充；
-- 巡检载荷、边缘接入、整机启动和部署；
-- 与 App/Cloud 的受控接口。
+### 2.1 范围
 
-本阶段非目标：
+本架构覆盖：
 
-- 不重写不在高频运动闭环中的 `omni_slam_manager` Python 控制面；
-- 不同时引入第二套导航器、第二套任务管理器或第二套控制权管理器；
-- 不为地图、状态、诊断等每项能力单独创建 Manager；
-- 不把 Cloud 可用性作为本地安全停车的前提。
+- 供应商传感器、LiDAR/IMU 状态估计、ICP 重定位和地图资产；
+- canonical TF、外参、frame alias、标准 body odom 和 ready；
+- 三维局部占据图、路线跟随、重规划、轨迹验收和闭环控制；
+- 厂商 SDK Bridge、速度仲裁、控制权、E-stop、BMS 和 RobotState；
+- 任务、路线、检查点、证据、返航、进桩、出桩和充电确认；
+- 机器人 Edge、Cloud Backend、Web Console、视频链和移动 App；
+- manifest、联合构建、目标板部署、A/B 更新、整机 bringup 和发布质量门。
+
+### 2.2 非目标
+
+- 不增加第二个任务管理器、第二个导航业务入口或第二个底盘控制权状态机；
+- 不把每个状态、地图或诊断能力拆成独立“Manager”进程；
+- 不要求高频算法控制面都从 Python 重写，重写只由实时性/可靠性证据决定；
+- 不把 Cloud、Web、MQTT 或视频可用性作为本地停车条件；
+- 不将供应商 IDL 中存在的接口自动视为产品已实现能力；
+- 不将单元测试通过等价为 ROS 图、目标板或真机放行。
 
 ## 3. 当前基线结论
 
-当前状态应定义为“核心模块可单独运行，尚未形成可部署整机巡检栈”。主要证据如下：
+### 3.1 已有能力
 
-- `omni_robot_bridge/launch/product_bringup.launch.py` 只启动 Bridge、Safety Supervisor 和可选 OpenNav Docking；
-- 当前打包脚本没有统一包含 `omni_slam`、`omni_planner` 和自研 `omni_docking`；
-- SLAM、Planner 仍依赖各仓库脚本单独启动，缺少统一 profile、启动顺序和故障域；
-- Mission 消费 `/omni/control/authority`，Bridge 尚未提供该 typed service；
-- Docking 仍使用 `/rosdeck/control_*` 字符串租约和 `lio_map`；
-- Edge Agent 仍可直接发布厂商速度 Topic、调用厂商姿态服务，形成第二控制面；
-- S100 Edge 生产配置未显式选择导航 adapter，当前会落到 simulation：机器不动也可能上报 patrol 成功；
-- Edge 的 map activate 只缓存 map identity，没有实际调用 SLAM 定位并等待 TF ready；
-- Bridge 的当前 RobotState 聚合没有纳入 `SlamStatus.initialized`/freshness，`motion_authorized` 也尚未执行完整定位门控；
-- `/omni/capture/photo`、`/omni/capture/record`、`/omni/recognize` 已有接口但没有产品 provider；
-- Mission/Docking 的 Python ROS 节点存在会阻断实际 Action 链路的实现错误，详见各自 C++ 重构设计。
+- 产品跨仓 IDL 已覆盖 RobotState、Mission、Docking、Route、Authority、巡检载荷和 ReturnToDock；
+- TF Manager 已实现 profile 驱动的完整 6DoF 外参、受管 TF、sensor alias 和 body odom；
+- SLAM 已有 FAST-LIO、ICP、子进程监督、状态 heartbeat 和不可变版本地图存储；
+- Planner 已有 3D 概率栅格、A*/B-spline 优化、终验、FollowRoute、heartbeat identity 和闭环控制；
+- Bridge 已有 Zsi/VBot adapter、单 SDK owner、三源速度仲裁、E-stop、BMS、RobotState 和 A/B 发布；
+- Mission/Docking 的纯行为层、资产解析、幂等、检查点和返航逻辑较完整；
+- Inspection Cloud 已有业务后端、数据库、MQTT、Web、视频和部署体系；
+- Rosdeck 已有现场 App、teleop 安全检查、任务 UI 和认证 WSS gateway。
 
-## 4. 架构原则和安全不变量
+### 3.2 为什么仍不是完整整机
 
-以下规则是实现和评审时不可被参数绕过的约束：
+以下不是“以后优化”，而是当前真实断链：
 
-1. `omni_robot_bridge` 是唯一厂商 SDK 所有者。
-2. Bridge 是唯一最终速度出口；厂商速度 Topic 只允许 Bridge 发布。
-3. Planner、Docking、Teleop 只发布各自的候选速度，不能触达 SDK。
-4. Mission Manager 只做业务编排，不发布速度、不计算轨迹、不直接访问厂商接口。
-5. `omni_tf_manager` 是 managed TF 边的唯一发布者；SLAM 只输出位姿、对齐结果和状态。
-6. 控制权不等于运动许可。即使租约有效，安全、定位、TF 或命令 freshness 不满足时仍必须输出零。
-7. 所有状态机、接口和超时默认 fail-closed；未知状态不能解释为 ready。
-8. App/Cloud/Edge 的任务和回充请求不得绕过 Mission；任何速度不得绕过 Bridge。Cloud 失联不能导致旧运动命令重放。
-9. 资产必须按 `robot_id + map_id + map_version + calibration_version` 绑定，不能只凭文件名推断。
-10. 进程存活不等于功能就绪，功能就绪也不等于允许运动。
+1. Mission 请求 `/omni/control/authority`，Bridge 没有 typed provider；
+2. Mission ROS Action/Future 接线存在 rclpy API 错误；
+3. Docking cancel 检查把 rclpy 属性当函数调用；
+4. photo/record/recognize 只有 IDL/client，没有产品 provider；
+5. Edge S100 adapter 仍可直接发厂商 `/vel_cmd`、调用厂商姿态/模式服务；
+6. Edge map activate 只缓存 identity，不安装地图、不启动定位、不等待 TF ready；
+7. Rosdeck 实际 Foxglove binary frame 与 WSS Gateway 的 CBOR policy 解析不匹配；
+8. TF ready 和 RobotState motion authorization 没有完整纳入 SLAM initialized/state/freshness；
+9. Mission/Docking 仍默认 `/state_estimation_global` 与 `lio_map`，canonical 迁移未完成；
+10. `omni_navi` 没有完整 bringup/preflight/systemd target；Bridge 的 product bringup 只启动 Bridge/Safety 和可选外部 OpenNav Docking。
 
-## 5. 目标逻辑架构
+因此准确表述是：**各模块可以独立构建/测试一部分能力，但当前工作区没有一条经过部署接线和节点级验证的“定位→巡检→证据→返航→回充”完整产品路径。**
+
+## 4. 架构原则和不可破坏的不变量
+
+1. `omni_robot_bridge` 是唯一厂商 SDK owner。
+2. Bridge 是唯一最终速度出口；Planner、Docking、App 只产生候选速度。
+3. `omni_tf_manager` 是受管 TF child 的唯一 authority；SLAM 不发布这些 TF。
+4. Mission 只做业务编排，不计算局部轨迹、不发布速度、不访问 SDK。
+5. 控制权不等于运动许可；有效 lease 仍可因 E-stop、定位、TF、来源或 freshness 输出零。
+6. 所有超时、未知枚举、NaN、frame 错配、publisher 冲突和进程 epoch 变化都 fail-closed。
+7. Cloud/App/Edge 的任务和回充请求进入同一 Mission/Docking/Bridge 权威链。
+8. 旧 command、旧轨迹、旧 lease heartbeat 在重连或重启后不得重放。
+9. Map、Route、Dock、Calibration、Evidence 和 BOM 必须带身份/version/hash，不能只靠文件名。
+10. 进程 alive、Action accepted、pose reached、UI 显示 ready 都不等于业务成功；成功必须由对应 owner 的终态和证据定义。
+
+## 5. 逻辑架构
 
 ```mermaid
 flowchart TB
-    subgraph NORTH["北向接入"]
-        APP["本地 App<br/>omni_ws_gateway"]
-        CLOUD["Cloud"]
-        EDGE["MQTT Edge Agent<br/>typed ROS facade"]
+    subgraph CLIENTS["现场与平台"]
+        APP["Rosdeck Mobile App"]
+        WEB["Inspection Web Console"]
+        CLOUD["Go Backend / PostgreSQL / MQTT / Video"]
     end
-    subgraph BUSINESS["业务编排"]
-        MISSION["omni_mission_manager<br/>任务、路线、检查点、返航编排"]
-        PAYLOAD["omni_inspection_executor<br/>拍照、录像、识别、证据落盘"]
+
+    subgraph NORTHBOUND["机器人北向接入"]
+        WSGW["omni_ws_gateway\n认证/RBAC/审计"]
+        FOX["Foxglove Bridge"]
+        EDGE["C++ Edge Agent\nCloud facade"]
     end
-    subgraph AUTONOMY["自主能力"]
-        PLANNER["omni_planner<br/>FollowRoute + 导航候选速度"]
-        DOCKING["omni_docking<br/>末端进桩、出桩、充电确认"]
+
+    subgraph BUSINESS["业务与载荷"]
+        MISSION["Mission Manager\n任务/路线/检查点/返航"]
+        INSPECT["Inspection Executor\n当前缺失"]
     end
-    subgraph ESTIMATION["状态估计"]
-        SLAM["omni_slam<br/>建图、定位、地图资产"]
-        TF["omni_tf_manager<br/>TF、外参、别名、ready"]
+
+    subgraph AUTONOMY["自主运动"]
+        PLANNER["SCAN Planner\nFollowRoute/轨迹/控制器"]
+        DOCK["Docking\n末端进出桩/充电"]
     end
-    subgraph MOTION["底盘和安全边界"]
-        SAFETY["omni_safety_supervisor<br/>急停与硬件安全输入"]
-        BRIDGE["omni_robot_bridge<br/>控制权、仲裁、限幅、watchdog、RobotState"]
-        SDK["Vendor SDK / 底盘 / BMS"]
+
+    subgraph ESTIMATION["状态估计与坐标"]
+        SENSOR["Vendor Sensors"]
+        SLAM["SLAM Manager + FAST-LIO + ICP"]
+        TF["TF Manager\nTF/alias/body odom/ready"]
     end
-    CLOUD <-->|MQTT TLS + durable outbox| EDGE
-    APP -->|typed ROS 任务| MISSION
-    EDGE -->|Cloud typed 任务| MISSION
+
+    subgraph SAFETY["底盘与安全边界"]
+        SUP["Safety Supervisor"]
+        BRIDGE["Robot Bridge\nauthority/arbiter/watchdog/state"]
+        SDK["Vendor SDK / BMS / Robot"]
+    end
+
+    APP --> WSGW --> FOX
+    WEB --> CLOUD
+    CLOUD <-->|MQTT + HTTP assets| EDGE
+    FOX --> MISSION
+    FOX -->|teleop candidate| BRIDGE
+    EDGE -->|typed facade 目标| MISSION
     MISSION --> PLANNER
-    MISSION --> DOCKING
-    MISSION --> PAYLOAD
+    MISSION --> DOCK
+    MISSION --> INSPECT
+    SENSOR --> TF
+    TF --> SLAM
     SLAM --> TF
     TF --> PLANNER
-    TF --> DOCKING
+    TF --> DOCK
     SLAM --> BRIDGE
     PLANNER -->|navigation candidate| BRIDGE
-    DOCKING -->|docking candidate| BRIDGE
-    APP -->|唯一 teleop candidate| BRIDGE
-    SAFETY --> BRIDGE
-    BRIDGE --> SDK
+    DOCK -->|docking candidate| BRIDGE
+    SUP --> BRIDGE --> SDK
     BRIDGE --> MISSION
-    BRIDGE --> APP
-    BRIDGE --> EDGE
-    PAYLOAD -->|证据 metadata| EDGE
+    INSPECT -->|metadata/outbox| EDGE
 ```
 
-## 6. 仓库、进程和职责
+图中 Edge→Mission 和 Inspection Executor 是目标产品路径；当前 Edge 仍有直接控制旁路，Executor 尚未存在。
 
-| 仓库 | 目标进程/节点 | 语言 | 唯一职责 | 当前偏差 |
+## 6. 仓库、进程与唯一职责
+
+| 仓库 | 正式进程/节点 | 语言 | 唯一职责 | 当前成熟度 |
 | --- | --- | --- | --- | --- |
-| `omni_robot_interfaces` | 无 | ROS IDL | 跨仓产品接口和常量的唯一来源 | SLAM 状态接口仍分散；V1 ABI 冻结不完整 |
-| `omni_tf_manager` | `/omni_tf_manager` | C++ | canonical TF、6DoF 外参、传感器 alias、标准 odom、TF ready | Dog/VBot 仍为 shadow；ready 语义需 fail-closed |
-| `omni_slam` | `/omni_slam_manager`、`/omni_fast_lio`、`/omni_icp_relocalization` | Python + C++ | 建图、地图存储、定位和 SLAM 状态 | canonical QoS 尚未闭环 |
-| `omni_planner` | `/omni_scan_planner`、`/omni_closed_loop_controller` | C++ | FollowRoute、规划、跟踪、navigation 候选速度 | 正式 Topic/ready 默认值和 feature 分支尚未收敛 |
-| `omni_robot_bridge` | `/omni_robot_bridge`、`/omni_safety_supervisor` | C++ | 唯一 SDK owner、租约、速度仲裁、安全门、BMS、RobotState | typed authority 缺失；当前节点名仍为 `rosdeck_*` |
-| `omni_docking` | `/omni_docking` | 目标 C++ | Dock/Undock、末端感知和控制、接触与充电确认 | 当前 Python 原型不可作为真机基线 |
-| `omni_mission_manager` | `/omni_mission_manager` | 目标 C++ | 任务、路线、检查点、持久化、Return-to-Dock 编排 | 当前 Python ROS wiring 有阻断问题 |
-| `omni-inspection` | `/omni_inspection_executor`、Edge Agent、视频进程 | C++ + Go + TS | C++ 载荷/Edge、Go backend/video、TS Web；证据和 Cloud 边缘接入 | 载荷 provider 缺失；Edge 仍可直控底盘 |
-| `rosdeck` | `/omni_ws_gateway` | Python/TS | 本地 App 接入、认证、协议转换 | ROS 发布白名单需要收紧 |
-| `omni_navi` | 无业务节点 | launch/config/systemd | 整机 BOM、profile、preflight、bringup、联合 CI | 目前只有文档和构建清单 |
+| `omni_robot_interfaces` | 无 | ROS IDL | 跨仓产品合同 | 接口完整；SLAM 类型仍分散 |
+| `omni_tf_manager` | `/omni_tf_manager` | C++ | TF/外参/alias/body odom/ready | 实现较完整；ready 需加强 |
+| `omni_slam` | Manager、FAST-LIO、ICP | Python+C++ | 建图/定位/地图版本/SLAM 状态 | 模块完整；整机 QoS/目标板证据不足 |
+| `omni_planner` | Planner、Controller、可选 route publisher | C++ | FollowRoute、局部规划、轨迹、navigation candidate | 实现较完整；接口名/整机 gate 待收敛 |
+| `omni_robot_bridge` | Bridge、Safety Supervisor | C++ | SDK、authority、arbiter、安全、BMS、RobotState | 核心完整；typed authority 缺失 |
+| `omni_docking` | `/omni_docking` | Python | 末端 Dock/Undock、配置、充电判断 | 行为原型；ROS bug/真机感知缺 |
+| `omni_mission_manager` | `/omni_mission_manager` | Python | 任务、路线、检查点、SQLite、返航编排 | 行为原型；ROS wiring 阻塞 |
+| `omni-inspection` | Edge、Backend、Web、Video；Executor 目标 | C++/Go/TS/Python | Cloud/Edge/载荷/媒体 | 平台面丰富；机器人控制边界未收敛 |
+| `rosdeck` | Mobile App、`omni_ws_gateway` | TS/Native/Python | 现场 App、WSS 认证代理 | UI/安全流程已有；binary proxy 风险 |
+| `vbot_ros2_msgs` | 无 | ROS IDL | VITA 上游合同 | 纯依赖，非功能实现 |
+| `omni_navi` | 当前无业务进程 | shell/Python/docs | manifest、BOM、联合构建、架构、bringup 目标 | 完整 bringup 尚缺 |
 
-迁移期允许保留旧 package/executable 名，但目标 ROS 节点名必须以 `omni_` 开头。旧 `/rosdeck/*` 和 `/scan_planner/cmd_vel` 只能作为有期限的兼容入口，不能成为新功能依赖。
+详细到 39 个 ROS 包的目录见 [REPOSITORY_AUDIT.md](REPOSITORY_AUDIT.md)。
 
-## 7. 部署拓扑和故障域
+## 7. 运行与部署拓扑
 
-`omni_navi` 内应增加一个纯集成包 `omni_robot_bringup`。它只包含：
+### 7.1 机器人上的目标故障域
 
-- 机器人 profile 选择与参数装配；
-- launch、systemd unit/target 和 preflight；
-- 版本 BOM、标定 checksum、地图/路线兼容检查；
-- 整机 smoke test。
-
-本阶段不新增“System Manager”业务节点。生命周期和业务状态仍由各组件自己提供，OS 级进程监督由 systemd 完成。
+不要求一个 launch 把所有节点变成一个 OS 进程。安全相关组件应保留可观察的故障域：
 
 ```mermaid
 flowchart TB
     TARGET["omni-robot.target"]
-    PREFLIGHT["omni-preflight.service<br/>oneshot"]
-    BRIDGE["omni-robot-bridge.service<br/>Bridge + Safety"]
-    TF["omni-tf-manager.service"]
-    SLAM["omni-slam.service"]
-    NAV["omni-navigation.service<br/>Planner + Controller"]
-    DOCK["omni-docking.service"]
-    PAYLOAD["omni-inspection-executor.service"]
-    MISSION["omni-mission.service"]
-    EDGE["omni-edge.service"]
-    TARGET --> PREFLIGHT
-    PREFLIGHT --> BRIDGE
-    PREFLIGHT --> TF
-    TF --> SLAM
-    SLAM --> NAV
-    BRIDGE --> NAV
-    BRIDGE --> DOCK
-    PREFLIGHT --> PAYLOAD
-    NAV --> MISSION
-    DOCK --> MISSION
-    PAYLOAD --> MISSION
-    MISSION --> EDGE
+    PRE["omni-preflight.service"]
+    BR["bridge.service\nBridge + Safety"]
+    TFU["tf-manager.service"]
+    SL["slam.service\nManager supervises algorithm process group"]
+    NAV["navigation.service\nPlanner + Controller"]
+    DK["docking.service"]
+    EX["inspection-executor.service"]
+    MS["mission.service"]
+    ED["edge.service"]
+    VID["video.service"]
+
+    TARGET --> PRE
+    PRE --> BR
+    PRE --> TFU
+    TFU --> SL
+    SL --> NAV
+    BR --> NAV
+    BR --> DK
+    PRE --> EX
+    NAV --> MS
+    DK --> MS
+    EX --> MS
+    MS --> ED
+    PRE --> VID
 ```
 
-这些箭头只表示启动依赖，不表示 readiness。节点可以提前存活，但在前置条件未满足时必须拒绝 Action 或保持零速。
+箭头代表启动依赖，不代表 readiness。服务可以先 alive，但前置不满足时必须拒绝动作/输出零。
 
-## 8. TF 和传感器契约
+### 7.2 当前实际部署
+
+- Bridge 仓已有 systemd、运行锁、资源约束、critical-child shutdown、A/B release/current/previous 和 health rollback；
+- `product_bringup.launch.py` 只包含 Bridge、Safety、可选 OpenNav Docking；
+- Mission 有独立 unit，但未被完整机器人 target 统一编排；
+- SLAM/Planner 主要由各仓脚本/launch 单独启动；
+- Edge/video/cloud 有各自 systemd/Compose；
+- 没有一个 profile 同时验证所有 Topic remap、TF authority、地图/路线/Dock/标定和关闭顺序。
+
+### 7.3 为什么不新增 System Manager
+
+- SLAM Manager 已管理 SLAM 子进程和状态；
+- Mission 已管理业务状态；
+- Bridge 已管理底盘和安全；
+- OS 进程 restart/ordering 由 systemd 擅长处理；
+- `omni_robot_bringup` 只应组合 profile、launch、preflight、systemd target、BOM 和 smoke test，不复制业务状态机。
+
+## 8. TF 与状态估计契约
 
 ### 8.1 Canonical TF 树
 
@@ -185,345 +243,469 @@ omni_map
             └── omni_rgb_camera_optical_frame
 ```
 
-| TF 边 | 唯一所有者 | 输入语义 |
+| TF 边 | 唯一 owner | 来源 |
 | --- | --- | --- |
-| `omni_map -> omni_odom` | `omni_tf_manager` | ICP 的 `T_map_lidar` 与已审核静态外参 |
-| `omni_odom -> omni_base_link` | `omni_tf_manager` | FAST-LIO 的 `T_odom_tracking` 与 tracking→base 外参 |
-| Base、IMU、LiDAR、Camera 固定边 | `omni_tf_manager` profile | 经审核的完整 6DoF 外参 |
-| 腿、关节等运动边 | `robot_state_publisher` | URDF/joint state；不得覆盖上述 child |
+| `omni_map→omni_odom` | TF Manager | mapping identity；localization ICP alignment |
+| `omni_odom→omni_base_link` | TF Manager | FAST-LIO tracking pose + base extrinsic |
+| base/sensor fixed edges | TF Manager profile | 已审核 6DoF 标定 |
+| 腿/关节运动边 | `robot_state_publisher` | URDF + joint state，不覆盖上述 child |
 
-### 8.2 原始 frame 与 canonical frame
+FAST-LIO 必须关闭 TF 发布。变换公式和输入校验见 [机器人运行时模块详解](MODULES_ROBOT_RUNTIME.md#32-输入计算和输出)。
 
-厂商消息可以继续使用 `/front_lidar`、`livox_frame` 等真实 Topic/frame。TF Manager profile 必须同时声明：
+### 8.2 Sensor alias
 
-- 原始 Topic；
-- 预期原始 `header.frame_id`；
-- canonical 输出 Topic/frame；
-- alias 是否经过真机验证；
-- 原始 frame 与 canonical frame 是否物理同一坐标系。
+TF Manager 的 `identity_frame_alias` 只改 metadata，不变换点云/IMU 数值。只有原始消息本来就在 canonical physical frame 的轴和原点上时才允许；否则必须真实变换数据。Authority profile 拒绝未验证 alias。
 
-Alias 只允许在“载荷坐标不变、仅名称归一化”时改 `header.frame_id`。如果两坐标系存在旋转或平移，必须对消息做真实坐标变换，不能伪装 alias。
+### 8.3 Profile 现状
 
-### 8.3 传感器到定位的数据流
+- Matrix profile 由模型/config validator 对齐，适合 authority；
+- generic dog/`omni_dog` 的真实 Topic/header/外参仍需真机审核；
+- `omni_vbot_dog.yaml` 当前源码实际设置为 authority，而同仓 README 仍写 shadow，属于文档漂移；
+- 部署必须记录最终 profile 文件 SHA，不能只记录 profile 名。
 
-```mermaid
-flowchart LR
-    RAW["厂商原始 Topic/frame"]
-    ALIAS["TF Manager<br/>frame 校验与 alias"]
-    SENSOR["/omni/sensors/*"]
-    LIO["FAST-LIO"]
-    ICP["ICP Relocalization"]
-    LOCAL["/state_estimation<br/>T_odom_tracking"]
-    GLOBAL["/icp_result<br/>T_map_lidar"]
-    TF["TF Manager"]
-    ODOM["/omni/tf_manager/body_odom_global"]
-    TREE["/tf + /tf_static"]
-    RAW --> ALIAS --> SENSOR
-    SENSOR --> LIO --> LOCAL --> TF
-    SENSOR --> ICP --> GLOBAL --> TF
-    TF --> ODOM
-    TF --> TREE
+### 8.4 正确 ready 语义
+
+目标：
+
+```text
+tf_ready =
+  profile_is_authority
+  && slam_status_fresh
+  && slam_status.initialized
+  && mode_state_pair_allowed
+  && sensor_odom_fresh
+  && frames_and_quaternions_valid
+  && jumps_within_limits
+  && (mapping || accepted_fresh_map_alignment)
 ```
 
-## 9. 核心 ROS 接口
+`DEGRADED`、`LOST`、`STOPPING`、`ERROR`、未知枚举、shadow、status timeout 全部为 false。当前实现还没有完整执行 `initialized/state` 条件。
 
-所有跨仓产品类型最终应由 `omni_robot_interfaces` 统一所有。V1 临时例外包括 `omni_tf_manager/msg/SlamStatus` 和 `omni_slam_interfaces` 的建图/定位接口；V2 将其迁入产品接口仓，由 SLAM 生产状态和提供操作，TF/Bridge/Mission/Bringup 只消费，TF Manager 永不成为 SLAM API owner。
+## 9. 控制权、运动许可与最终速度
 
-### 9.1 状态与事件
-
-| 名称 | 类型 | 目标 QoS | 生产者 | 消费者 |
-| --- | --- | --- | --- | --- |
-| `/omni/robot_state` | `RobotState` | Reliable + Transient Local，depth 1 | Bridge | Mission、Docking、App、Edge |
-| `/omni/slam/status` | `SlamStatus` | Reliable + Transient Local，depth 1，周期心跳 | SLAM Manager | TF、Bridge、Mission |
-| `/omni/tf_manager/ready` | `Bool` | Reliable + Transient Local，depth 1 | TF Manager | Bridge、Planner、Docking |
-| `/omni/mission/status` | `MissionStatus` | Reliable + Transient Local，depth 1 | Mission | Bridge、App、Edge |
-| `/omni/mission/events` | `MissionEvent` | Reliable + Volatile，depth ≥ 10 | Mission | Edge、审计 |
-| `/omni/mission/checkpoint_results` | `CheckpointResult` | V2 Reliable + Volatile，depth 10；历史走查询 Service | Mission | Edge、App |
-| `/omni/docking/status` | `DockStatus` | Reliable + Transient Local，depth 1 | Docking | Mission、App、Edge |
-| `/diagnostics` | `DiagnosticArray` | Reliable + Volatile | 各模块 | Edge、运维 |
-
-### 9.2 Action 和 Service
-
-| 名称 | 类型 | Provider | Client |
-| --- | --- | --- | --- |
-| `/omni/mission/execute` | `ExecuteInspection` | Mission | App/Edge |
-| `/omni/mission/return_to_dock` | `ReturnToDock` | Mission | App、低电策略 |
-| `/omni/navigation/follow_route` | `FollowRoute` | Planner | Mission |
-| `/omni/docking/dock` | `Dock` | Docking | Mission |
-| `/omni/docking/undock` | `Undock` | Docking | Mission |
-| `/omni/control/authority` | `ControlAuthority` | Bridge | App Gateway、Mission、Docking |
-| `/omni/docking/config` | `GetDockConfig` | Docking | Mission |
-| `/omni/docking/verify_charge` | `VerifyCharge` | Docking | Mission；maintenance 只读入口可选 |
-| `/omni/capture/photo` | `CapturePhoto` | Inspection Executor | Mission |
-| `/omni/capture/record` | V1 `StartRecord`；V2 应升级为 Action | Inspection Executor | Mission |
-| `/omni/recognize` | `Recognize` | Inspection Executor | Mission |
-| `/omni/slam/start_mapping` | V1 `omni_slam_interfaces/srv/StartMapping` | SLAM Manager | 运维/Bringup |
-| `/omni/slam/stop_mapping` | V1 `omni_slam_interfaces/srv/StopMapping` | SLAM Manager | 运维/Bringup |
-| `/omni/slam/save_map` | V1 `omni_slam_interfaces/action/SaveMap` | SLAM Manager | 运维/Bringup |
-| `/omni/slam/start_localization` | V1 `omni_slam_interfaces/action/StartLocalization` | SLAM Manager | Mission/Edge/Bringup |
-| `/omni/slam/stop_localization` | V1 `omni_slam_interfaces/srv/StopLocalization` | SLAM Manager | 运维/Bringup |
-
-当前没有实际产品 provider 的 P0 接口为 `/omni/control/authority`；巡检载荷三个 provider 属于形成真实巡检闭环前的 P1。
-
-### 9.3 运动数据面
-
-| Topic | 类型 | 目标 QoS | 唯一生产者 |
-| --- | --- | --- | --- |
-| `/omni/cmd_vel/teleop` | `TwistStamped` | Best Effort + Volatile，depth 1 | `omni_ws_gateway`；Edge 远程 teleop 当前禁用 |
-| `/omni/cmd_vel/navigation` | V2 `TwistStamped` | Best Effort + Volatile，depth 1 | Planner Controller |
-| `/omni/cmd_vel/docking` | V2 `TwistStamped` | Best Effort + Volatile，depth 1 | Docking |
-| `/omni/cmd_vel/final` | `Twist`，内部接口 | Best Effort + Volatile，depth 1 | Bridge Arbiter |
-| `/omni/safety/estop` | `Bool` heartbeat | Reliable + Volatile，depth 1 | Safety Supervisor |
-
-`/scan_planner/cmd_vel` 作为 V1 兼容别名保留一个迁移窗口。所有速度候选必须配置 Bridge receipt-time watchdog；`TwistStamped` 只有 stamp 和 twist，不具有业务 sequence/TTL。时间同步健康时再检查 stamp skew。Preflight/运行时图监控必须确认每个正式候选 Topic 只有一个 publisher。
-
-### 9.4 高频数据 QoS
-
-- LiDAR、IMU、camera、high-rate odom 统一采用 `SensorDataQoS`；
-- Writer 为 Best Effort 时，所有 reader 也必须兼容 Best Effort；
-- 不能依赖 DDS 实现“自动兼容” Reliable reader 与 Best-Effort writer；
-- CI 必须启动真实 publisher/subscriber，检查 endpoint compatibility，而不只检查源码字符串。
-
-## 10. 关键业务流
-
-### 10.1 巡检任务
-
-```mermaid
-sequenceDiagram
-    participant App
-    participant Gateway
-    participant Cloud
-    participant Edge
-    participant Mission
-    participant Bridge
-    participant Planner
-    participant Payload
-    App->>Gateway: authenticated local dispatch
-    Gateway->>Mission: typed Dispatch/Execute
-    Cloud->>Edge: MQTT dispatch(request_id, sequence)
-    Edge->>Mission: ExecuteInspection / DispatchMission
-    Mission->>Mission: route/map/state/idempotency gates
-    Mission->>Bridge: acquire MISSION lease
-    Bridge-->>Mission: lease token + expiry
-    Mission->>Planner: FollowRoute(leg_id, path)
-    Planner->>Bridge: navigation candidate velocity
-    Planner-->>Mission: progress / terminal result
-    Mission->>Payload: checkpoint operation
-    Payload-->>Mission: URI + SHA256 + capture metadata
-    Mission-->>Gateway: local status/event/result
-    Mission-->>Edge: Cloud durable event/result
-    Mission->>Bridge: release lease
-```
-
-Mission 的所有持久化状态、事件和幂等记录必须在一个事务中提交。Cloud 重试只允许复用同一 `(request_id, sequence)`，不能重复产生物理动作。
-
-### 10.2 Return-to-Dock
-
-```mermaid
-sequenceDiagram
-    participant Mission
-    participant Planner
-    participant Bridge
-    participant Docking
-    participant BMS
-    Mission->>Bridge: acquire MISSION
-    Mission->>Planner: FollowRoute(to standoff)
-    Planner-->>Mission: reached standoff
-    Mission->>Planner: cancel/stop acknowledged
-    Mission->>Bridge: release MISSION
-    Bridge-->>Mission: owner NONE + zero confirmed
-    Mission->>Docking: Dock(request identity)
-    Docking->>Bridge: acquire DOCKING
-    Docking->>Bridge: docking candidate velocity
-    Docking->>Docking: relative pose/contact safety loop
-    Docking->>BMS: verify connected/charging
-    Docking->>Bridge: zero then release DOCKING
-    Docking-->>Mission: terminal result
-```
-
-MISSION 与 DOCKING 禁止直接抢占。交接顺序必须是：下游停止确认 → Bridge 零速 → 旧租约 release ack → owner NONE → 新租约 acquire。
-
-### 10.3 人工接管
-
-- App 必须显式申请 APP authority；
-- APP 可以抢占自动任务，但 Bridge 必须先输出零再切换 owner；
-- Mission/Docking 收到 preempt 后进入可审计 terminal 状态；
-- App/WS session 断线时 APP lease 到期，旧命令不得重放；
-- Edge/Cloud 断线只关闭 Cloud 命令入口和上报链，不得影响本地 APP lease，也不得恢复已禁用的远程 teleop；
-- Edge 不得调用 `/vel_cmd` 或厂商 run-mode 服务，所有姿态/运动请求经过 Bridge typed API。
-
-## 11. 控制权与运动许可
-
-### 11.1 控制权状态
+### 9.1 权威状态机
 
 ```mermaid
 stateDiagram-v2
     [*] --> NONE
-    NONE --> APP: explicit APP acquire
+    NONE --> APP: explicit acquire
     NONE --> MISSION: mission gates + acquire
     NONE --> DOCKING: docking gates + acquire
-    APP --> NONE: release / expire / fault
-    MISSION --> NONE: release / expire / fault
-    DOCKING --> NONE: release / expire / fault
+    APP --> NONE: release / expiry / fault
+    MISSION --> NONE: release / expiry / terminal
+    DOCKING --> NONE: release / expiry / terminal
     MISSION --> APP: explicit human takeover
     DOCKING --> APP: explicit human takeover
 ```
 
-V2 `ControlAuthority` 必须包含或等价表达：owner type、client ID、lease token/epoch、expiry、acquire/renew/release、preemption reason 和 release acknowledgement，避免旧 renew 对新租约产生 ABA 问题。
+APP 可以显式人工抢占；MISSION 和 DOCKING 之间不直接抢占，必须零速确认后交接。当前 String lease 默认 5 s，通过 client ID 前缀推断 owner；typed service 仍缺 provider。
 
-当前 IDL 文档与 Bridge 实现的 owner 优先级不一致，必须在 W35 冻结为单一合同。远程 Cloud/Edge teleop 不进入本轮接口；当前产品 profile 中 `/omni/cmd_vel/teleop` 只允许 WS Gateway 发布。
+### 9.2 最终运动许可
 
-### 11.2 运动许可
-
-Bridge 对每个周期计算：
+目标 Bridge 每周期计算：
 
 ```text
 motion_allowed =
-  bridge_connected
+  adapter_connected
+  && safety_supervisor_armed
   && safety_heartbeat_fresh
   && !estop_latched
   && lease_valid
   && source_matches_owner
   && source_command_fresh
+  && command_is_finite_and_within_limits
+  && publisher_cardinality_valid
   && robot_mode_allows_motion
-  && (owner == APP || (tf_ready && localization_ready))
+  && (owner == APP || (slam_localized_fresh && tf_ready))
   && (owner != DOCKING || docking_safety_ready)
 ```
 
-任何输入未知、超时、NaN、frame 不匹配、publisher 数量异常都按 false 处理。
+当前 `RobotState.motion_authorized` 仅约等于 `!estop && authority != NONE`，不能被消费者当作上述真值。
 
-V1 `RobotState.motion_authorized` 还不能表达上述完整真值。W35 的 V2 合同必须加入或等价表达 SLAM `initialized/state/freshness`、TF ready、authority epoch 和 motion-gate reason；Bridge 是最终聚合和发布者，消费者不得重新猜测许可。
+### 9.3 速度管线
 
-### 11.3 `/omni/tf_manager/ready` 正确语义
-
-- shadow 模式的主 `ready` 永远为 false；候选诊断使用不同接口；
-- 必须是 authority mode；
-- SlamStatus 必须 fresh、`initialized=true` 且 state 属于允许集合；
-- 建图允许 `MAPPING/MAP_READY`，定位只允许 `LOCALIZED`；
-- `DEGRADED/LOST/STOPPING/ERROR/STOPPED` 必须 false；
-- odom、map alignment 和必需传感器必须 fresh；
-- mode/state 不匹配或未知枚举必须 false 并上报 ERROR。
-
-## 12. Bringup、Shutdown 和恢复
-
-### 12.1 启动顺序
-
-1. Preflight 验证 robot profile、BOM、标定 checksum、地图资产、ROS Domain、RMW、时间同步、磁盘余量和 SDK singleton。
-2. Bridge 与 Safety 启动，保持 E-stop 锁存并向厂商侧持续输出零。
-3. TF Manager 加载完整静态树和传感器 alias；未经审核的 profile 不允许 authority。
-4. SLAM Manager 启动，初始为 STOPPED。
-5. 根据操作选择建图或定位；定位必须得到 fresh、initialized、LOCALIZED。
-6. TF Manager 完成 `map -> odom -> base` 并发布 authoritative ready。
-7. Planner、Docking 启动；Inspection Executor 校验相机/算法 endpoint、证据目录、磁盘配额和持久化 outbox。
-8. Mission 在 Planner、Docking 和任务所需 Payload ready 后接收请求；不满足 gate 时明确拒绝，不能把缺失证据误报为 checkpoint 成功。
-9. Edge/App 才开放会引发运动的 API。
-10. 操作员显式 arm Safety 并 reset E-stop。
-
-### 12.2 关闭顺序
-
-1. Gateway/Edge 停止接受新的运动和任务请求；
-2. Mission 取消活动 Action；
-3. Planner/Docking 发布零并确认停止；
-4. Inspection Executor 取消活动载荷操作，原子提交或废弃临时文件并 flush durable outbox；
-5. Bridge 释放租约、锁存 E-stop，并保持最终零速；
-6. 停止 Mission、Docking、Planner、Inspection Executor、SLAM、TF；
-7. Bridge 最后退出，调用厂商 stop/passive 策略并释放 SDK lock。
-
-### 12.3 故障处置
-
-| 故障 | 检测 | 必须动作 | 恢复策略 |
+| Owner | Candidate | 当前类型/Topic | Watchdog 后进入 |
 | --- | --- | --- | --- |
-| Planner/Controller 退出 | cmd/heartbeat timeout | Bridge 零速，Mission 失败或暂停 | 重新定位后新建 goal，不续跑旧轨迹 |
-| Docking 退出 | cmd/lease timeout | 零速、租约失效 | 回到 standoff，人工确认后重试 |
-| Mission 退出 | lease 过期 | 零速，数据库活动任务标记 INTERRUPTED | 不自动恢复运动 |
-| Inspection Executor 退出 | endpoint/heartbeat 或 operation timeout | 活动 checkpoint 明确 FAILED，禁止伪造 artifact/result | 重启后按 operation identity 查询；无新命令不重复采集 |
-| SLAM/TF 过期 | status/odom/ready timeout | 撤销 MISSION/DOCKING 运动许可 | 原地重定位；失败则等待人工 |
-| Safety heartbeat 消失 | deadline timeout | 立即锁存 E-stop | 恢复后显式 arm + reset |
-| App/WS session 断线 | session/lease heartbeat | APP lease 到期，Bridge 零速 | 重连后重新认证和申请新 lease |
-| Edge/MQTT 断线 | session/heartbeat | 关闭 Cloud 命令入口/上报；本地自主任务按冻结策略继续或安全暂停 | 重连不重放旧命令，不影响本地 APP lease |
-| Bridge 退出 | systemd + 厂商 watchdog | 厂商侧停车，整个安全 epoch 失效 | 重启后仍保持锁存 |
-| 资产版本不匹配 | Mission 前置检查 | 拒绝任务 | 选择匹配资产 |
-| 数据库/磁盘满 | transaction/space monitor | 拒绝新任务和新证据 | 清理、审计后恢复 |
-| 时间同步异常 | chrony/PTP 与 stamp skew | 拒绝远程 stamped 命令 | 同步恢复后重新授权 |
+| APP | teleop | TwistStamped `/omni/cmd_vel/teleop` | Bridge arbiter |
+| MISSION | navigation | Twist `/scan_planner/cmd_vel` | Bridge arbiter |
+| DOCKING | docking | Twist `/omni/cmd_vel/docking` | Bridge arbiter |
+| Bridge | final | Twist `/omni/cmd_vel/final` internal seam | Adapter/SDK |
 
-## 13. 地图、路线、Dock、标定和证据资产
+目标将 navigation/docking 都收敛成 stamped candidate，但迁移必须同步修改 producer、Bridge、QoS 和 tests。最终 Topic/SDK 绝不能被 Edge 或 Planner 旧 bridge 同时发布。
 
-所有可持久化资产必须包含 schema version、创建工具版本、hash 和原子更新语义。
+### 9.4 E-stop 恢复
 
-| 资产 | 所有者 | 必需身份字段 |
+启动默认 latched/unarmed。恢复顺序必须是：安全输入恢复并保持 fresh → 显式 arm Supervisor → 显式 reset Bridge latch → 重新申请新 lease。重启不能自动恢复旧运动 epoch。
+
+## 10. 关键业务流
+
+### 10.1 上电到可导航
+
+```mermaid
+sequenceDiagram
+    participant OS as systemd/preflight
+    participant B as Bridge/Safety
+    participant T as TF Manager
+    participant S as SLAM Manager
+    participant P as Planner
+    OS->>OS: verify BOM/profile/calibration/map/disk/time
+    OS->>B: start latched + zero
+    OS->>T: load one authority profile
+    OS->>S: StartLocalization(map id/version)
+    S->>S: verify PCD/hash; start ICP + FAST-LIO group
+    S-->>T: fresh SlamStatus(LOCALIZED, initialized)
+    S-->>T: odom + ICP alignment
+    T-->>P: canonical TF/body odom/ready
+    P->>P: start but wait for fresh inputs
+    OS->>B: operator arm + reset
+```
+
+任何一步失败都保持零速。当前缺少统一 preflight/launch，且 TF ready 条件偏弱。
+
+### 10.2 建图与保存
+
+```text
+StartMapping(session)
+ -> start FAST-LIO process group
+ -> fresh lidar/imu/odom => MAPPING initialized
+ -> SaveMap(map_id, calibration_hash)
+ -> FAST-LIO /map_save
+ -> staging copy + SHA256 + manifest + fsync
+ -> publish immutable version
+ -> atomic current symlink
+ -> MAP_READY
+```
+
+Map 只有保存 Action 成功且 checksum 可复验才成为资产。Cloud 上传/激活是另一条同步路径，不得直接改 versions 内文件。
+
+### 10.3 巡检任务
+
+```mermaid
+sequenceDiagram
+    participant C as App/Cloud
+    participant M as Mission
+    participant B as Bridge
+    participant P as Planner
+    participant X as Inspection Executor
+    C->>M: Dispatch/Execute(request_id, sequence, route/map)
+    M->>M: route/checkpoint/state/map/idempotency gates
+    M->>B: acquire MISSION authority
+    B-->>M: lease/epoch（当前 typed provider 缺失）
+    loop 每个移动段
+        M->>P: FollowRoute(unique leg id, path)
+        P-->>B: navigation candidate + heartbeat
+        P-->>M: spatial progress / terminal
+        M->>X: dwell/photo/record/recognize
+        X-->>M: artifact URI/hash/result（当前 provider 缺失）
+    end
+    M->>M: persist snapshot/event/result transactionally
+    M->>B: zero confirmed then release
+    M-->>C: status/events/results
+```
+
+相同 `(request_id, sequence)` 重放必须返回原结果，不重复移动或采集。
+
+### 10.4 Pause、Resume、Cancel
+
+- Pause：请求当前 Planner leg 受控停止，等待终态，持久化 PAUSED，释放 MISSION lease；
+- Resume：重新检查 RobotState/map/Planner，获取新 lease，用新 attempt identity 从剩余段继续；
+- Cancel：向当前 Planner/inspection operation 转发 cancel，等待停止，持久化 CANCELED，零速后 release；
+- 进程重启：活动任务标为 INTERRUPTED，不自动恢复动作。
+
+### 10.5 Return-to-Dock
+
+```mermaid
+sequenceDiagram
+    participant M as Mission
+    participant P as Planner
+    participant B as Bridge
+    participant D as Docking
+    participant BMS
+    M->>D: GetDockConfig(current map/version)
+    M->>B: acquire MISSION
+    M->>P: FollowRoute(current pose -> standoff)
+    P-->>M: reached/terminal
+    M->>P: ensure stopped
+    M->>B: release MISSION
+    B-->>M: zero + owner NONE ack（目标）
+    M->>D: Dock(request id)
+    D->>B: acquire DOCKING
+    D-->>B: docking candidate
+    D->>D: final pose + relative/contact gates（后两项当前缺）
+    D->>BMS: fresh charging evidence
+    D->>B: zero + release
+    D-->>M: docked/charging terminal
+```
+
+用户返航遇到活动 mission 应先取消；低电策略可以以明确原因 INTERRUPT mission。到 final pose 但未充电返回失败，不报告“回充成功”。
+
+### 10.6 人工接管
+
+App 显式申请 APP authority。Bridge 零速切换 owner 后才接受 teleop。Mission/Docking 收到 preempt 后写可审计终态。App/WSS 断线只让 APP lease 过期；Cloud/MQTT 断线不应影响现场 App 的有效本地 lease，也不能重放旧远程命令。
+
+### 10.7 Cloud 地图激活
+
+目标成功链：HTTP 上传 PCD→Backend 校验 hash/complete→MQTT activate(identity/hash)→Edge 下载到 staging→SLAM MapStore import→StartLocalization→LOCALIZED+initialized fresh→TF ready→ACK success。当前只做到 Backend 校验和 Edge 缓存 identity。
+
+## 11. 路线、检查点、Dock 和证据
+
+### 11.1 资产绑定
+
+| 资产 | Owner | 必需身份 |
 | --- | --- | --- |
-| 地图 | SLAM Manager | `map_id`、`map_version`、SHA256、frame、创建时间 |
-| 路线 | Mission Manager | route ID、map identity、frame、checkpoint IDs、SHA256 |
-| Dock 配置 | Docking | dock ID、map identity、frame、final pose、standoff、schema |
-| TF/标定 | TF Manager profile | robot model/serial、calibration version、每个 6DoF、审核状态、SHA256 |
-| 巡检证据 | Inspection Executor + Mission | mission/checkpoint/request identity、时间、frame/pose、URI、SHA256、上传状态 |
-| 软件 BOM | omni_navi | 每仓 commit SHA、toolchain、平台 ABI、artifact digest、CI evidence |
+| Map | SLAM Manager | map ID/version/checksum/frame/calibration hash |
+| Route | Mission | route ID/map identity/frame/checksum/created time |
+| Checkpoint plan | Mission | route identity/schema/checkpoint IDs/point indices |
+| Dock | Docking | dock ID/map identity/frame/final pose/standoff/schema |
+| Calibration/TF profile | TF Manager | robot model/serial/version/full 6DoF/verified aliases/checksum |
+| Evidence | Inspection Executor + Mission | mission/request/checkpoint/action/time/pose/map/software/URI/hash |
+| Software BOM | Navi | 每仓 SHA、toolchain/platform ABI/config hash/artifact digest/test evidence |
 
-写入策略必须使用 staging + fsync/校验 + atomic rename；读取时不能把旧 frame 或旧 map 只作为 warning 继续使用。
+### 11.2 写入规则
 
-## 14. 真实巡检所需的最小补充能力
+- staging 与最终目录在同一文件系统；
+- 内容写完后 fsync 文件和目录；
+- 计算/验证 SHA256；
+- atomic rename/symlink switch；
+- immutable version 不原地修改；
+- 读取时 identity/frame/hash 不匹配必须拒绝，不只 warning；
+- 临时证据失败要可清理，已成功证据要通过 durable outbox 上传。
 
-### 14.1 必须新增
+## 12. 北向平台与媒体边界
 
-1. **`omni_robot_bringup` 集成包**：位于 `omni_navi`，无业务节点，只负责 profile、launch、systemd、preflight、BOM 和整机测试。
-2. **`omni_inspection_executor` 单一运行进程**：提供拍照、录像、识别、证据落盘/hash 和离线队列。先作为一个 C++ ROS package 实现，不按相机或算法继续拆节点/仓库。
+### 12.1 Cloud/Edge
 
-### 14.2 并入现有模块
+- Backend 是 durable platform state owner，PostgreSQL 保存任务/告警/资产/审计，Redis 只做加速；
+- MQTT command 依靠 command ID、expiry、sequence、ACK 和去重，而非只靠 QoS；
+- Edge SafetyGuard 做 token/session/timestamp/sequence/limit 和约 500 ms stop；
+- 最终仍必须经 Mission/Bridge，Edge guard 不是第二个 Bridge；
+- production profile 必须禁止 simulation adapter 静默启用。
 
-| 能力 | 归属 |
+### 12.2 App/WSS Gateway
+
+- App 通过 TLS WSS 到 Gateway，再经 loopback Foxglove 到 ROS；
+- Gateway 负责 login、viewer/operator/admin RBAC、失败锁定和 append-only audit；
+- 当前 Gateway E2E 使用自定义 CBOR policy frame，与 App 真实 Foxglove binary publish/service 不同；
+- 必须做真实 App wire test 后才能放行任务和 teleop；
+- 配对保存 SPKI pin 不等于客户端已强制校验，需错误证书真机测试。
+
+### 12.3 Video
+
+- 机器人 streamer 订阅 ROS 视频，使用有界 drop-old queue 和可选 S100 hardware transcode；
+- 主路径：H.264/SRT→MediaMTX→WHEP/WebRTC；
+- RTSP→MJPEG/snapshot/recording 是兼容路径；Pion/LiveKit/ffmpeg 是明确可选路径；
+- 媒体失败与 Bridge/Safety 隔离，不得影响本地停车；
+- 同一 profile 只选一个主媒体路径，避免重复拉流/转码。
+
+## 13. 启动、关闭与恢复
+
+### 13.1 目标启动顺序
+
+1. Preflight：robot/profile、BOM、platform ABI、SDK singleton、标定 SHA、地图/路线/Dock、ROS domain/RMW、时间同步、磁盘和设备权限。
+2. Bridge/Safety：以 latched/unarmed、持续零速启动，验证唯一 publisher/SDK lock。
+3. TF Manager：加载唯一 authority profile，静态树和 alias 校验。
+4. SLAM Manager：初始 STOPPED；根据操作启动 mapping/localization。
+5. Localization：MapStore hash、ICP、FAST-LIO、fresh status/odom；等待 LOCALIZED+initialized。
+6. TF ready：建立完整 map→odom→base 和 canonical body odom。
+7. Planner/Docking/Inspection Executor：先 alive，但无 ready 不接收动作；检查磁盘/相机/模型/BMS。
+8. Mission：Planner、Docking、所需 inspection provider 可用后开放派发。
+9. Edge/Gateway：开放会引发物理动作的 northbound API。
+10. 操作员显式 arm/reset，系统进入可授权状态。
+
+### 13.2 目标关闭顺序
+
+1. Edge/Gateway 停止接受新动作；
+2. Mission cancel 活动任务/返航；
+3. Planner/Docking/Executor cancel 并完成零速/文件终结；
+4. Bridge 撤销 lease、锁存 E-stop、保持零速；
+5. 停 Mission、Docking、Planner、Executor；
+6. 停 SLAM 子进程组和 TF；
+7. flush Edge outbox/audit；
+8. Bridge 最后退出，adapter 做 vendor stop/passive 并释放 SDK lock。
+
+### 13.3 重启原则
+
+- Bridge 重启创建新安全 epoch，仍 latched；
+- Planner 重启使旧 trajectory identity 无效；
+- Mission 重启把 active 任务标 INTERRUPTED；
+- Docking 重启由 Bridge watchdog 归零，不能自动续进桩；
+- SLAM/TF 重启撤销自动运动许可，必须重新定位；
+- Edge/Cloud 重连只补 durable 状态，不重放过期运动；
+- App 重连重新认证并申请新 lease。
+
+## 14. 故障模型
+
+| 故障 | 检测 | 立即动作 | 恢复 |
+| --- | --- | --- | --- |
+| Safety heartbeat 丢失 | deadline/freshness | Bridge 锁存、零速 | 修复源→arm→reset→new lease |
+| Candidate cmd 丢失 | receipt watchdog | 对应源归零 | 新鲜 command + 有效 owner |
+| Planner/Controller 退出 | heartbeat/cmd/process | Bridge 零速，Mission fail/pause | 重新定位、发新 goal，不续旧轨迹 |
+| Docking 退出 | cmd/lease timeout | 零速、lease 失效 | 回 standoff/人工确认后新请求 |
+| Mission 退出 | lease expiry/DB recovery | 零速、INTERRUPTED | 人工/策略新派发 |
+| Inspection Executor 退出 | operation timeout/process | checkpoint FAILED，不伪造 artifact | 按 operation identity 查询/人工重试 |
+| SLAM/TF stale/lost | status/odom/ready timeout | 撤销 MISSION/DOCKING 许可 | 原地重定位，失败等待人工 |
+| Bridge 退出 | systemd/vendor watchdog | 厂商停车、epoch 失效 | restart 仍 latched |
+| App/WSS 断线 | session/lease heartbeat | APP lease 到期、零速 | 重认证/new lease |
+| Edge/MQTT 断线 | session/heartbeat | 关闭 Cloud 入口；本地安全继续 | 不重放旧 command |
+| Map/route/dock/calibration mismatch | identity/hash/frame gate | 拒绝动作 | 激活匹配资产 |
+| DB/磁盘满 | transaction/space monitor | 拒绝新任务/证据 | 清理、审计、恢复 |
+| 时间同步异常 | NTP/PTP/stamp skew | 拒绝远程 stamped command | 同步后重新授权 |
+| Video pipeline 失败 | bus error/metrics | 独立重启；不影响底盘 | session/stream 重建 |
+| Cloud DB/Redis 故障 | health/readiness | API 降级/拒写 | durable store 恢复；不影响本地停车 |
+
+## 15. 配置与 profile 管理
+
+### 15.1 Profile 内容
+
+一个整机 profile 至少选择：
+
+- robot model/serial、adapter（Zsi/VBot）和 SDK ABI；
+- TF profile、外参版本、真实 Topic/header；
+- SLAM launch/config、map root、算法阈值；
+- Planner real topics、frame、速度/加速度、TF ready 强制项；
+- Bridge source Topic/type/watchdog/limits/Safety；
+- Dock root、frame、pose/battery/lease接口；
+- Mission route/db/provider endpoints；
+- Edge adapter 和 simulation forbidden；
+- 视频 input/codec/transport；
+- ROS Domain、RMW、network/storage paths。
+
+### 15.2 优先级和不可覆盖项
+
+允许按平台覆盖性能参数，但以下不能用临时 launch 参数绕过：唯一 SDK owner、唯一 TF authority、E-stop fail-closed、publisher cardinality、map/frame/hash gate、typed authority、simulation forbidden 和完整 motion gate。
+
+## 16. 安全与信任边界
+
+| 边界 | 身份/授权 | 仍需的防御 |
+| --- | --- | --- |
+| App→Gateway | TLS token + role + lockout | Foxglove-aware policy、SPKI pin 实测、session expiry |
+| Cloud Web→Backend | JWT/RBAC/rate limit | CSP、refresh rotation、server-side permission |
+| Backend→Edge | MQTT identity/ACL（目标 TLS） | device cert、command expiry/sequence/ACK |
+| Edge→ROS | 本机进程权限 | typed allowlist、禁止 vendor/final control |
+| ROS→Bridge | authority + source topic | freshness、publisher count、limits、E-stop |
+| Bridge→SDK | process lock/adapter | vendor watchdog、stop retry、ABI check |
+| Asset→runtime | identity/version/hash | signature、atomic activation、rollback |
+
+SROS2/ROS graph ACL、设备证书、release signature/SBOM 是量产硬化项；它们不能替代当前进程内的安全状态机。
+
+## 17. 可观测性与审计
+
+必须能够从一次 request ID 追踪到：
+
+```text
+Cloud/App request
+ -> Gateway/Backend audit
+ -> Edge command/ACK
+ -> Mission event + SQLite record
+ -> Planner leg/action identity
+ -> Bridge lease owner/source/rejection
+ -> Checkpoint operation + evidence hash
+ -> Return/Dock reason + BMS sample
+```
+
+推荐统一字段：robot ID、boot/safety epoch、request ID、sequence、mission ID、leg/attempt、map ID/version、software BOM、monotonic/system time、reason code。高频 payload 不进入审计日志，只记录 metadata、摘要和故障快照。
+
+核心指标：
+
+- sensor/odom/status/cmd heartbeat age；
+- TF ready/motion gate false reason；
+- authority owner/lease remaining/preemption；
+- Planner plan latency/replan/reject/stuck/cross-track；
+- Dock pose error/contact/charge confirmation time；
+- mission/checkpoint success/retry/failure；
+- Edge MQTT reconnect/ACK latency/outbox depth；
+- video input FPS/drop/encode/pipeline restart/latency；
+- disk/DB/CPU/memory/temperature。
+
+## 18. 验证与发布质量门
+
+### 18.1 验证层级
+
+| 层级 | 必需证据 |
 | --- | --- |
-| GPIO 急停、跌倒、异常倾角、底盘故障、过温 | Safety Supervisor + Bridge |
-| Dock 相对定位、接触/红外/视觉标记 | `omni_docking` provider/plugin |
-| 悬崖、负障碍、地形安全 | Planner/Perception 安全输入 |
-| 环形 rosbag、参数/TF/log 故障快照 | Edge Agent 触发和上传；bringup 配置 |
-| 地图/路线/标定同步和回滚 | Edge 传输；各资产所有者校验和激活 |
-| 证据断点上传 | Inspection Executor 本地 spool + Edge upload |
-| 低电返航策略 | Mission；BMS 数据来自 Bridge |
-| 时间同步健康 | Host/preflight + Diagnostics |
+| 静态合同 | IDL 常量、manifest SHA、配置 schema、package allowlist、禁止旁路 |
+| 单元 | 状态机、几何、地图/路线/Dock parser、arbiter、watchdog、protocol frame |
+| ROS 节点 | real action/service callback、cancel、executor concurrency、QoS endpoints、publisher count |
+| 组件集成 | SLAM↔TF、Planner↔Controller、Mission↔Planner/Docking/Bridge、App↔Gateway↔ROS |
+| Matrix 仿真 | 定位→路线→检查点 mock→返航→Dock mock→故障注入 |
+| 目标板 smoke | Orin/S100 native/交叉产物真正执行，设备/codec/ABI/温度/资源 |
+| HIL/真机 | 速度轴、E-stop、定位丢失、断网/重启、Dock 接触/充电、多循环 |
+| Soak | 8/24/72 h、磁盘/日志/内存、MQTT/video reconnect、地图切换 |
 
-### 14.3 后置能力
+### 18.2 本次可执行测试
 
-- OTA A/B、签名、SBOM 和自动回滚；
-- 设备证书、SROS2/ROS 图 ACL；
-- 多机调度、任务优化和边缘 AI；
-- 8/24/72 小时稳定性、故障注入和运营指标自动回传。
+- Docking 纯逻辑：108/108；
+- Mission 纯逻辑：208/208；
+- Bridge Python 合同/发布：44 通过、1 跳过；
+- Planner 静态合同：14 通过，2 个 ROS launch test 因无 ROS `launch` 包未导入；
+- FAST-LIO Python 回归：20/20；TF profile test 因无 PyYAML 未运行；
+- WSS Gateway 非网络：69/69；
+- Gateway E2E 因当前沙箱禁止 loopback bind 未执行；
+- SLAM Manager：42 通过、4 项 ROS 环境跳过、1 项因无 PyYAML 导入失败；
+- C++ ROS、Go full backend、Web/App 未在本机全量构建。
 
-当前不新增独立 Control Manager、Robot State Manager、Lifecycle Manager、Map Manager 或第二套 Patrol Executor。
+详细解释见 [REPOSITORY_AUDIT.md](REPOSITORY_AUDIT.md#6-阅读与验证证据)。
 
-## 15. 平台和发布边界
+### 18.3 联合发布 BOM
 
-- x86/Matrix：编译、单元/契约、仿真 E2E、故障注入；
-- Orin：原生或受控 sysroot 构建、相机/视频、资源和温度验证；
-- S100：交叉编译 + 目标板 smoke/HIL，不能只以“成功生成 tar.gz”代替执行验证；
-- 真实机器狗：实际 Topic/header、外参、运动轴、急停、定位丢失、Dock/Undock 循环、长时间运行。
+每个 release 必须记录：11 仓中实际纳入仓库的不可变 SHA、构建镜像/toolchain、ROS/RMW、平台 ABI、vendor SDK、TF/profile/标定 hash、Map/Route/Dock schema 兼容、artifact digest/signature/SBOM、测试 URL/报告和已知豁免。
 
-联合版本必须记录所有仓库不可变 SHA、构建镜像/toolchain、平台 ABI、配置/标定 hash、测试 URL 和 artifact checksum。release workflow 不得默认跟随其他仓库的 `main`。
+当前工作区与 lock manifest 在 Planner、SLAM、TF、Rosdeck 上不同；发布前必须更新 lock 或对 lock commit 重跑验证。
 
-## 16. 当前放行阻断项
+## 19. 放行阻断项
 
-以下问题未关闭前，不允许宣称“整机自动巡检可真机运行”：
+### P0：整机运动闭环
 
-1. Bridge 实现 typed `/omni/control/authority`，并成为唯一租约状态机；
-2. Edge Agent 和 WS Gateway 删除直连厂商服务/最终速度的生产路径；
-3. canonical sensor/odom QoS 全链路兼容；
-4. TF ready 改为 authority + initialized + valid state + freshness 的 fail-closed 语义；
-5. Planner 强制依赖 canonical TF/ready，并收敛到 `/omni/cmd_vel/navigation`；
-6. Mission/Docking 完成 C++ 行为重写和节点级 Action 测试；
-7. Docking 确定并验证真机末端相对观测、接触和充电证据；
-8. Dog/VBot 四传感器 Topic、真实 `header.frame_id` 和完整 6DoF 外参通过真机审核；
-9. `omni_robot_bringup` 能以一个 profile 启停完整栈并执行反向安全关闭；
-10. Matrix 跑通定位→巡检→返航→回充仿真链，真实机器狗再完成分级 HIL。
+1. Bridge 实现 typed ControlAuthority，并让 App/Mission/Docking 共用一个 lease state machine；
+2. 修复 Mission rclpy Future/goal handle，完成真实 ROS Action/Service 节点测试；
+3. 修复 Docking cancel 接线，验证所有 terminal path 零速后 release；
+4. Edge 删除生产 `/vel_cmd` 和厂商服务直连，改 typed ROS facade；
+5. TF ready/RobotState/Bridge motion gate 纳入 initialized/state/freshness；
+6. 建立 `omni_robot_bringup` 完整 startup/shutdown/preflight 和 publisher cardinality 检查；
+7. 统一 canonical pose/frame/Topic 或提供受验证迁移 bridge。
 
-## 17. 架构决策记录（待冻结）
+### P1：真实巡检和回充
 
-| ADR | 决策 | 状态 |
-| --- | --- | --- |
-| ADR-001 | Bridge 为唯一 SDK owner 和最终速度出口 | Accepted |
-| ADR-002 | TF Manager 为 canonical TF 唯一 authority | Accepted |
-| ADR-003 | Mission/Docking 同仓单进程 C++ 行为重写，不逐行翻译 | Proposed |
-| ADR-004 | `omni_robot_bringup` 只做组合和预检，不新增业务 Manager | Proposed |
-| ADR-005 | APP 仅显式抢占；MISSION 与 DOCKING 采用零速确认交接 | Proposed |
-| ADR-006 | 真实 Dock 必须具备相对观测 + 接触/充电多证据闭环 | Proposed |
-| ADR-007 | 巡检载荷使用单一 Inspection Executor，证据本地先落盘 | Proposed |
+1. 实现 Inspection Executor 三个 provider、证据 hash 和 durable upload outbox；
+2. 实现 Dock 相对观测、接触/限位和 BMS 多证据；
+3. Edge map activate 真正接入 MapStore/StartLocalization/TF ready；
+4. 修复 Rosdeck Gateway Foxglove binary policy，并做真实 App wire E2E；
+5. 四传感器真实 Topic/header/6DoF 外参在每个机器人 profile 上审核；
+6. Matrix 跑通完整链，目标板/HIL/真机分级验证。
 
-这些 Proposed ADR 在 W35 评审后冻结；未冻结项不得在各仓库各自发明不同语义。
+### P2：量产硬化
+
+- 设备证书/MQTT TLS/SROS2 ACL；
+- release signature、SBOM、全栈 A/B rollback；
+- 统一 reason/epoch/trace 字段；
+- 8/24/72 h soak、故障注入、资源/温度/磁盘 gate；
+- 数据 retention、备份/恢复、隐私和审计策略。
+
+## 20. 架构决策记录
+
+| ADR | 决策 | 状态 | 依据 |
+| --- | --- | --- | --- |
+| ADR-001 | Bridge 是唯一 SDK owner 和最终速度出口 | Accepted | 消除多控制面和最后写入者不确定性 |
+| ADR-002 | TF Manager 是受管 TF 和外参唯一 authority | Accepted | 消除重复 TF 和 frame 漂移 |
+| ADR-003 | Mission 是唯一巡检业务状态机 | Accepted | Cloud/Edge/App 不重复任务执行逻辑 |
+| ADR-004 | `omni_navi` 只做集成/bringup/BOM，不新增业务 Manager | Accepted | 保持故障域与职责清晰 |
+| ADR-005 | MISSION↔DOCKING 必须零速确认交接；APP 只显式抢占 | Proposed，待 typed lease 冻结 | 防止双源同时生效 |
+| ADR-006 | 地图/路线/Dock/标定/证据全部 identity+hash 绑定 | Accepted | 避免跨地图/外参误用 |
+| ADR-007 | 新增单一 Inspection Executor，不按相机/算法拆多个产品进程 | Proposed | 缩小状态和证据一致性问题 |
+| ADR-008 | MediaMTX/WHEP 为主视频路径，其他为显式 fallback | Proposed | 减少重复媒体控制面 |
+| ADR-009 | V2 SLAM 跨仓合同迁入 `omni_robot_interfaces` | Proposed | 修复类型所有权泄漏 |
+| ADR-010 | Python Mission/Docking 是否 C++ 重写由节点级/目标板证据决定，行为合同保持不变 | Proposed | 避免把语言替换误当架构修复 |
+
+## 21. 文档维护规则
+
+1. 每次 lock manifest 更新时更新审计基线/BOM，不用浮动 `main` 描述发布。
+2. 改 Topic/type/QoS/frame/enum 时先更新 `INTERFACE_MATRIX.md` 和 IDL，再改 producer/consumer/tests。
+3. 改模块内部实现时更新对应 MODULES 文档，不在总架构复制算法细节。
+4. 旧路径只有明确 owner、移除条件和截止版本时才可保留。
+5. “已实现”至少要求源码 provider+consumer 对接；“已验证”必须同时注明在哪个平台、哪层测试。
+6. 架构图中的目标边必须在文字中标出当前缺口，避免读图误判。
+7. 真实 profile 与 README 冲突时，以部署 YAML 和运行图为准，并修复文档漂移。
+
+---
+
+一句话总结：Omni 当前已经拥有大多数必要积木，真正需要完成的是**单一权威接线、完整运动许可、真实载荷/Dock 证据、统一 bringup 和跨端协议验证**。这些闭环完成之前，任何单模块演示、UI 成功提示或发布包生成都不能替代整机安全放行。

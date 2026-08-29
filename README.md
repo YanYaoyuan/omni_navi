@@ -41,6 +41,16 @@ V1 migration exceptions: omni_tf_manager/SlamStatus, omni_slam_interfaces
 详细职责和远端地址见 [docs/REPOSITORIES.md](docs/REPOSITORIES.md)，系统关系见
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
+2026-08-28 全仓源码审计将详细内容拆成四个配套索引：
+
+- [机器人运行时模块详解](docs/MODULES_ROBOT_RUNTIME.md)；
+- [平台、边缘、视频与客户端模块详解](docs/MODULES_PLATFORM_CLIENTS.md)；
+- [跨模块接口矩阵](docs/INTERFACE_MATRIX.md)；
+- [仓库、包、版本与测试证据清单](docs/REPOSITORY_AUDIT.md)。
+
+总架构文档明确区分当前实现、目标路径、遗留兼容和放行缺口；单个
+Topic、接口或单元测试存在，不代表整机巡检链已经接通。
+
 当前三人团队的近期交付顺序见
 [docs/INTEGRATION_TODO.md](docs/INTEGRATION_TODO.md)。Mission Manager 与 Docking
 的 C++ 行为重写分别在 `omni_mission_manager/docs/CPP_REWRITE_DESIGN.md` 和
