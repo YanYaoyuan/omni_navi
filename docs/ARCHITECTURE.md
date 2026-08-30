@@ -1,8 +1,8 @@
 # Omni 巡检机器人整机架构
 
-> 文档状态：源码审计版 v1.0
+> 文档状态：源码审计版 v1.1
 >
-> 审计基线：2026-08-28 当前工作区
+> 审计基线：2026-08-30 当前工作区
 >
 > 适用平台：Matrix/x86、NVIDIA Orin、RDK S100、真实机器狗
 >
@@ -15,6 +15,7 @@
 
 - [机器人运行时模块详解](MODULES_ROBOT_RUNTIME.md)：Interfaces、TF、SLAM、Planner、Bridge、Docking、Mission；
 - [平台、边缘、视频与客户端模块详解](MODULES_PLATFORM_CLIENTS.md)：Inspection Cloud/Edge/Web/Video、Rosdeck、VBot IDL、Navi 集成；
+- [逐模块缺失与补齐分析](MODULE_GAP_ANALYSIS.md)：每个模块的算法、运行时、集成、产品、验证缺口，补齐设计、依赖和验收；
 - [跨模块接口矩阵](INTERFACE_MATRIX.md)：Topic、Service、Action、TF、QoS、资产和北向协议；
 - [全仓库源码审计清单](REPOSITORY_AUDIT.md)：11 个仓库、39 个 ROS 包、提交版本、入口和测试证据；
 - [仓库目录](REPOSITORIES.md) 与 [联合构建](BUILD.md)：远端所有权和导入/构建方法；
@@ -56,7 +57,7 @@
 
 - 产品跨仓 IDL 已覆盖 RobotState、Mission、Docking、Route、Authority、巡检载荷和 ReturnToDock；
 - TF Manager 已实现 profile 驱动的完整 6DoF 外参、受管 TF、sensor alias 和 body odom；
-- SLAM 已有 FAST-LIO、ICP、子进程监督、状态 heartbeat 和不可变版本地图存储；
+- SLAM 已有 FAST-LIO 前端、ICP 初始重定位、子进程监督、状态 heartbeat 和不可变 PCD 版本存储；关键帧、回环检测、位姿图和全局地图优化后端尚缺；
 - Planner 已有 3D 概率栅格、A*/B-spline 优化、终验、FollowRoute、heartbeat identity 和闭环控制；
 - Bridge 已有 Zsi/VBot adapter、单 SDK owner、三源速度仲裁、E-stop、BMS、RobotState 和 A/B 发布；
 - Mission/Docking 的纯行为层、资产解析、幂等、检查点和返航逻辑较完整；
@@ -159,10 +160,10 @@ flowchart TB
 
 | 仓库 | 正式进程/节点 | 语言 | 唯一职责 | 当前成熟度 |
 | --- | --- | --- | --- | --- |
-| `omni_robot_interfaces` | 无 | ROS IDL | 跨仓产品合同 | 接口完整；SLAM 类型仍分散 |
+| `omni_robot_interfaces` | 无 | ROS IDL | 跨仓产品合同 | V1 覆盖面较全；Authority/readiness/资产 V2 未冻结 |
 | `omni_tf_manager` | `/omni_tf_manager` | C++ | TF/外参/alias/body odom/ready | 实现较完整；ready 需加强 |
-| `omni_slam` | Manager、FAST-LIO、ICP | Python+C++ | 建图/定位/地图版本/SLAM 状态 | 模块完整；整机 QoS/目标板证据不足 |
-| `omni_planner` | Planner、Controller、可选 route publisher | C++ | FollowRoute、局部规划、轨迹、navigation candidate | 实现较完整；接口名/整机 gate 待收敛 |
+| `omni_slam` | Manager、FAST-LIO、ICP | Python+C++ | 建图/定位/地图版本/SLAM 状态 | 前端和初始重定位已有；SLAM 后端、回环和图优化缺失 |
+| `omni_planner` | Planner、Controller、可选 route publisher | C++ | FollowRoute、局部规划、轨迹、navigation candidate | 局部规划/路线执行较强；全局路由、地形和动态障碍能力缺失 |
 | `omni_robot_bridge` | Bridge、Safety Supervisor | C++ | SDK、authority、arbiter、安全、BMS、RobotState | 核心完整；typed authority 缺失 |
 | `omni_docking` | `/omni_docking` | Python | 末端 Dock/Undock、配置、充电判断 | 行为原型；ROS bug/真机感知缺 |
 | `omni_mission_manager` | `/omni_mission_manager` | Python | 任务、路线、检查点、SQLite、返航编排 | 行为原型；ROS wiring 阻塞 |

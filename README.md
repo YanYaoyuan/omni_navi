@@ -48,6 +48,11 @@ V1 migration exceptions: omni_tf_manager/SlamStatus, omni_slam_interfaces
 - [跨模块接口矩阵](docs/INTERFACE_MATRIX.md)；
 - [仓库、包、版本与测试证据清单](docs/REPOSITORY_AUDIT.md)。
 
+2026-08-30 在上述事实审计上新增
+[逐模块缺失与补齐分析](docs/MODULE_GAP_ANALYSIS.md)，逐项区分算法、运行时、
+集成、产品和验证缺口，并给出 SLAM 后端、Mission/Docking C++、Inspection
+Executor、Bridge authority/readiness、Edge/App 收敛以及整机放行标准。
+
 总架构文档明确区分当前实现、目标路径、遗留兼容和放行缺口；单个
 Topic、接口或单元测试存在，不代表整机巡检链已经接通。
 
